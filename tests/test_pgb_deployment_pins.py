@@ -19,3 +19,13 @@ def test_both_model_snapshots_use_immutable_revisions():
     assert "MINERU_VLM_REVISION=bff20d4ae2bf202df9f45284b4d43681555a97ed" in dockerfile
     assert "MINERU_PIPELINE_REVISION=ed6b654c018d742e65a17671e379c5e6ecc87ec9" in dockerfile
     assert dockerfile.count("revision='${MINERU_") == 2
+
+
+def test_ci_blocks_deployment_on_exact_linux_dependency_stage():
+    dockerfile = (ROOT / "Dockerfile").read_text(encoding="utf-8")
+    workflow = (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
+    assert "AS dependency-preflight" in dockerfile
+    assert "version('mineru') == '3.4.5'" in dockerfile
+    assert "version('runpod') == '1.10.0'" in dockerfile
+    assert "--python-platform x86_64-unknown-linux-gnu" in workflow
+    assert "--target dependency-preflight" in workflow
