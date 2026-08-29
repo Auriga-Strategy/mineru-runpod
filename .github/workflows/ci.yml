@@ -10,6 +10,35 @@ permissions:
   contents: read
 
 jobs:
+  dependency-preflight:
+    name: Dependency preflight (Linux AMD64)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+
+      - name: Resolve the complete production dependency graph
+        run: |
+          python -m pip install uv==0.11.17
+          uv pip compile requirements.txt \
+            --python-version 3.12 \
+            --python-platform x86_64-unknown-linux-gnu \
+            --no-cache \
+            --quiet >/dev/null
+
+      - name: Build the exact container dependency stage
+        run: |
+          docker build \
+            --platform linux/amd64 \
+            --target dependency-preflight \
+            --build-arg VLLM_VERSION=v0.11.2 \
+            --progress plain \
+            .
+
   test:
     name: Test (Python ${{ matrix.python-version }})
     runs-on: ubuntu-latest

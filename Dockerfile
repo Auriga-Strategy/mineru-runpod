@@ -16,7 +16,7 @@
 # any per-endpoint runtime-download tax. Trade-off: image grows by ~4 GB.
 
 ARG VLLM_VERSION=v0.11.2
-FROM vllm/vllm-openai:${VLLM_VERSION}
+FROM vllm/vllm-openai:${VLLM_VERSION} AS runtime-dependencies
 
 # PGB benchmark builds pin the immutable Hugging Face revisions as well as the
 # Python parser version. The resulting RunPod image reference is recorded with
@@ -86,6 +86,22 @@ RUN pip install --no-cache-dir uv
 # dependencies that match the vllm version in the base image.
 COPY requirements.txt /worker/requirements.txt
 RUN uv pip install --system --no-cache -r requirements.txt
+
+# This target is the mandatory preflight gate. It exercises the exact
+# Linux/AMD64 base image and dependency installation without downloading the
+# multi-gigabyte model snapshots. RunPod deployment is allowed only after this
+# target succeeds in CI.
+FROM runtime-dependencies AS dependency-preflight
+RUN python3 -c "from importlib.metadata import version; \
+    assert version('mineru') == '3.4.5'; \
+    assert version('runpod') == '1.10.0'; \
+    import runpod, tomlkit"
+
+# The default/final image inherits the dependency layer proven above, then
+# adds the immutable model snapshots and worker code.
+FROM runtime-dependencies AS runtime
+ARG MINERU_VLM_REVISION=bff20d4ae2bf202df9f45284b4d43681555a97ed
+ARG MINERU_PIPELINE_REVISION=ed6b654c018d742e65a17671e379c5e6ecc87ec9
 
 # Bake both MinerU model dependencies into the image at /root/.cache/huggingface
 # (HF's default cache path). Runs AFTER pip install so huggingface_hub is
