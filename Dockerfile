@@ -43,7 +43,9 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1 \
     HF_HUB_OFFLINE=1 \
-    TRANSFORMERS_OFFLINE=1
+    TRANSFORMERS_OFFLINE=1 \
+    MINERU_MODEL_SOURCE=local \
+    MINERU_TOOLS_CONFIG_JSON=/root/mineru.json
 
 # PGB benchmark guardrails live in the image rather than as mutable endpoint
 # settings. The historical benchmark intentionally submits at most eight pages
@@ -137,6 +139,31 @@ RUN HF_HUB_OFFLINE=0 TRANSFORMERS_OFFLINE=0 HF_XET_HIGH_PERFORMANCE=1 \
     python3 -c "from huggingface_hub import snapshot_download; \
     snapshot_download(repo_id='opendatalab/PDF-Extract-Kit-1.0', \
     revision='${MINERU_PIPELINE_REVISION}')"
+
+# MinerU's documented offline mode resolves model paths from mineru.json.
+# Merely baking immutable Hugging Face snapshots is insufficient: a later
+# snapshot_download(repo) lookup without the same explicit revision cannot
+# resolve that snapshot while HF_HUB_OFFLINE=1. Point MinerU directly at the
+# pinned local snapshots so runtime never performs a Hub revision lookup.
+RUN python3 -c "import json; from pathlib import Path; \
+    vlm=Path('/root/.cache/huggingface/hub/models--opendatalab--MinerU2.5-Pro-2605-1.2B/snapshots/${MINERU_VLM_REVISION}'); \
+    pipeline=Path('/root/.cache/huggingface/hub/models--opendatalab--PDF-Extract-Kit-1.0/snapshots/${MINERU_PIPELINE_REVISION}'); \
+    assert vlm.is_dir() and pipeline.is_dir(); \
+    config={'models-dir': {'pipeline': str(pipeline), 'vlm': str(vlm)}, 'model-source': 'local', 'config_version': '1.3.2'}; \
+    Path('/root/mineru.json').write_text(json.dumps(config, sort_keys=True), encoding='utf-8')"
+
+# Mandatory model gate: exercise MinerU 3.4.5's own local-path resolver with
+# networking disabled and prove that every pipeline model plus the VLM exists
+# below the two immutable snapshots before RunPod receives the image.
+RUN --network=none python3 -c "from pathlib import Path; \
+    from mineru.utils.enum_class import ModelPath; \
+    from mineru.utils.models_download_utils import auto_download_and_get_model_root_path; \
+    pipeline=Path(auto_download_and_get_model_root_path(ModelPath.pp_doclayout_v2, repo_mode='pipeline')); \
+    vlm=Path(auto_download_and_get_model_root_path('/', repo_mode='vlm')); \
+    required=(ModelPath.pp_doclayout_v2, ModelPath.unimernet_small, ModelPath.pp_formulanet_plus_m, ModelPath.pytorch_paddle, ModelPath.slanet_plus, ModelPath.unet_structure, ModelPath.paddle_table_cls); \
+    assert all((pipeline / item).exists() for item in required); \
+    assert (vlm / 'config.json').is_file(); \
+    assert str(pipeline).endswith('${MINERU_PIPELINE_REVISION}') and str(vlm).endswith('${MINERU_VLM_REVISION}')"
 
 # Copy the worker code last so iterating on it doesn't bust the pip or
 # model-cache layers. handler.py is the entry point; the worker/ package
