@@ -10,7 +10,11 @@
 mineru[core,vllm]==3.4.5
 
 # RunPod serverless SDK — provides runpod.serverless.start() and async helpers.
-runpod==1.12.0
+# 1.10.0 is the newest release whose published dependency range remains
+# compatible with MinerU 3.4.5: it requires tomlkit>=0.12.2 while MinerU pins
+# tomlkit<0.14.0. RunPod 1.10.1+ requires tomlkit>=0.15.0, so those releases
+# are unsatisfiable with this exact parser version.
+runpod==1.10.0
 
 # The engine-agnostic half of this worker: input transport (url / b64 /
 # volume_path + format detection), outbound target checks, response packaging

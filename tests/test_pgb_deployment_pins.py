@@ -9,7 +9,7 @@ ROOT = Path(__file__).resolve().parents[1]
 def test_mineru_and_top_level_runtime_dependencies_are_exactly_pinned():
     requirements = (ROOT / "requirements.txt").read_text(encoding="utf-8")
     assert "mineru[core,vllm]==3.4.5" in requirements
-    assert "runpod==1.12.0" in requirements
+    assert "runpod==1.10.0" in requirements
     assert "httpx==0.28.1" in requirements
     assert "mineru[core,vllm]>=" not in requirements
 
