@@ -7,13 +7,11 @@
 # At runtime: handler.py listens for RunPod jobs, downloads/decodes the input
 # PDF, calls MinerU's async parse, and returns the result as a base64 tarball.
 #
-# Model weights are baked into the image at build time (under HF's default
-# cache at /root/.cache/huggingface). RunPod's Cached Models
-# dashboard feature only supports one model per endpoint, and MinerU needs
-# two: the VLM (opendatalab/MinerU2.5-Pro-2605-1.2B) and the pipeline-
-# backend model set (opendatalab/PDF-Extract-Kit-1.0). Baking both removes
-# the dependency on RunPod's Cached Models setup, the Network Volume, and
-# any per-endpoint runtime-download tax. Trade-off: image grows by ~4 GB.
+# The smaller VLM snapshot is baked at its immutable revision. The much larger
+# pipeline model set is supplied by RunPod Cached Models, then rejected at
+# process start unless the mounted refs/main and snapshot directory match the
+# immutable revision below. This keeps the image small without silently moving
+# the model behind the endpoint.
 
 ARG VLLM_VERSION=v0.11.2
 FROM vllm/vllm-openai:${VLLM_VERSION} AS runtime-dependencies
@@ -104,19 +102,12 @@ RUN python3 -c "from importlib.metadata import version; \
 FROM runtime-dependencies AS runtime
 ARG MINERU_VLM_REVISION=bff20d4ae2bf202df9f45284b4d43681555a97ed
 ARG MINERU_PIPELINE_REVISION=ed6b654c018d742e65a17671e379c5e6ecc87ec9
+ENV PGB_MINERU_VLM_REVISION=${MINERU_VLM_REVISION} \
+    PGB_MINERU_PIPELINE_REVISION=${MINERU_PIPELINE_REVISION}
 
-# Bake both MinerU model dependencies into the image at /root/.cache/huggingface
-# (HF's default cache path). Runs AFTER pip install so huggingface_hub is
-# available, and BEFORE the handler.py COPY so iterating on handler code
-# doesn't bust these layers.
-#
-# - MinerU2.5-Pro-2605-1.2B: the VLM backend's model
-# - PDF-Extract-Kit-1.0: the pipeline backend's OCR + layout + formula +
-#   table models
-#
-# Split into two RUN layers (one per model) so a partial failure or a
-# bump to a single model only re-downloads that model, not both. The
-# ~30-minute RunPod build ceiling makes this resilience valuable.
+# Bake only MinerU2.5-Pro-2605-1.2B into the image. The pipeline backend's OCR,
+# layout, formula and table models are mounted from RunPod's single cached
+# model slot as opendatalab/PDF-Extract-Kit-1.0.
 #
 # HF_XET_HIGH_PERFORMANCE=1 tells the Xet backend (hf-xet, pinned in
 # requirements.txt) to saturate the build node's network bandwidth and
@@ -134,36 +125,13 @@ RUN HF_HUB_OFFLINE=0 TRANSFORMERS_OFFLINE=0 HF_XET_HIGH_PERFORMANCE=1 \
     python3 -c "from huggingface_hub import snapshot_download; \
     snapshot_download(repo_id='opendatalab/MinerU2.5-Pro-2605-1.2B', \
     revision='${MINERU_VLM_REVISION}')"
-# hadolint ignore=DL3059
-RUN HF_HUB_OFFLINE=0 TRANSFORMERS_OFFLINE=0 HF_XET_HIGH_PERFORMANCE=1 \
-    python3 -c "from huggingface_hub import snapshot_download; \
-    snapshot_download(repo_id='opendatalab/PDF-Extract-Kit-1.0', \
-    revision='${MINERU_PIPELINE_REVISION}')"
 
-# MinerU's documented offline mode resolves model paths from mineru.json.
-# Merely baking immutable Hugging Face snapshots is insufficient: a later
-# snapshot_download(repo) lookup without the same explicit revision cannot
-# resolve that snapshot while HF_HUB_OFFLINE=1. Point MinerU directly at the
-# pinned local snapshots so runtime never performs a Hub revision lookup.
-RUN python3 -c "import json; from pathlib import Path; \
-    vlm=Path('/root/.cache/huggingface/hub/models--opendatalab--MinerU2.5-Pro-2605-1.2B/snapshots/${MINERU_VLM_REVISION}'); \
-    pipeline=Path('/root/.cache/huggingface/hub/models--opendatalab--PDF-Extract-Kit-1.0/snapshots/${MINERU_PIPELINE_REVISION}'); \
-    assert vlm.is_dir() and pipeline.is_dir(); \
-    config={'models-dir': {'pipeline': str(pipeline), 'vlm': str(vlm)}, 'model-source': 'local', 'config_version': '1.3.2'}; \
-    Path('/root/mineru.json').write_text(json.dumps(config, sort_keys=True), encoding='utf-8')"
-
-# Mandatory model gate: exercise MinerU 3.4.5's own local-path resolver with
-# networking disabled and prove that every pipeline model plus the VLM exists
-# below the two immutable snapshots before RunPod receives the image.
+# The baked half can be proven during the image build. The cached pipeline half
+# is validated by model_bootstrap.py before handler.py (and therefore before
+# RunPod reports the worker ready or receives a document).
 RUN --network=none python3 -c "from pathlib import Path; \
-    from mineru.utils.enum_class import ModelPath; \
-    from mineru.utils.models_download_utils import auto_download_and_get_model_root_path; \
-    pipeline=Path(auto_download_and_get_model_root_path(ModelPath.pp_doclayout_v2, repo_mode='pipeline')); \
-    vlm=Path(auto_download_and_get_model_root_path('/', repo_mode='vlm')); \
-    required=(ModelPath.pp_doclayout_v2, ModelPath.unimernet_small, ModelPath.pp_formulanet_plus_m, ModelPath.pytorch_paddle, ModelPath.slanet_plus, ModelPath.unet_structure, ModelPath.paddle_table_cls); \
-    assert all((pipeline / item).exists() for item in required); \
-    assert (vlm / 'config.json').is_file(); \
-    assert str(pipeline).endswith('${MINERU_PIPELINE_REVISION}') and str(vlm).endswith('${MINERU_VLM_REVISION}')"
+    vlm=Path('/root/.cache/huggingface/hub/models--opendatalab--MinerU2.5-Pro-2605-1.2B/snapshots/${MINERU_VLM_REVISION}'); \
+    assert vlm.is_dir() and (vlm / 'config.json').is_file()"
 
 # Copy the worker code last so iterating on it doesn't bust the pip or
 # model-cache layers. handler.py is the entry point; the worker/ package
@@ -172,6 +140,7 @@ RUN --network=none python3 -c "from pathlib import Path; \
 # runpod-doc-worker pin above. Both must land at /worker/ so
 # `from worker import ...` resolves from the script's directory.
 COPY handler.py /worker/handler.py
+COPY model_bootstrap.py /worker/model_bootstrap.py
 COPY worker /worker/worker
 
 # Tiny fixture PDF used by local smoke input and optional Hub tests. It is
@@ -181,4 +150,4 @@ COPY .runpod/test-fixture.pdf /worker/test-fixture.pdf
 
 # RunPod's serverless runtime invokes Python directly. `python3` is what
 # vllm/vllm-openai ships on PATH; `python` is not always aliased.
-CMD ["python3", "-u", "handler.py"]
+CMD ["python3", "-u", "model_bootstrap.py"]
