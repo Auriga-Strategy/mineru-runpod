@@ -45,6 +45,21 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     HF_HUB_OFFLINE=1 \
     TRANSFORMERS_OFFLINE=1
 
+# PGB benchmark guardrails live in the image rather than as mutable endpoint
+# settings. The historical benchmark intentionally submits at most eight pages
+# per request, uses one parse at a time on a 24 GB GPU, and warms the same hybrid
+# backend that the benchmark invokes. MinerU 3.4 routes German/Latin OCR through
+# the `ch` PP-OCRv6 model family; ISO code `de` is not a model selector here.
+# Probe responses contain container/model layout details and are unnecessary in
+# the managed benchmark path, so they are disabled by default.
+ENV MINERU_MAX_CONCURRENCY=1 \
+    MINERU_MAX_PAGES_PER_JOB=8 \
+    MINERU_WARMUP_BACKEND=hybrid-auto-engine \
+    MINERU_WARMUP_LANG=ch \
+    MINERU_DISABLE_PROBE=1 \
+    LOG_FORMAT=json \
+    REFRESH_WORKER_AFTER_PAGES=0
+
 # vllm-openai inherits an entrypoint that launches the OpenAI server. Override
 # it so our handler can be the process.
 ENTRYPOINT []
