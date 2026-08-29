@@ -29,3 +29,13 @@ def test_ci_blocks_deployment_on_exact_linux_dependency_stage():
     assert "version('runpod') == '1.10.0'" in dockerfile
     assert "--python-platform x86_64-unknown-linux-gnu" in workflow
     assert "--target dependency-preflight" in workflow
+
+
+def test_runtime_uses_minerus_documented_local_model_mode():
+    dockerfile = (ROOT / "Dockerfile").read_text(encoding="utf-8")
+    assert "MINERU_MODEL_SOURCE=local" in dockerfile
+    assert "MINERU_TOOLS_CONFIG_JSON=/root/mineru.json" in dockerfile
+    assert "'model-source': 'local'" in dockerfile
+    assert "RUN --network=none python3 -c" in dockerfile
+    assert "auto_download_and_get_model_root_path" in dockerfile
+    assert "assert all((pipeline / item).exists() for item in required)" in dockerfile
