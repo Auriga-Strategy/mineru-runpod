@@ -18,6 +18,13 @@
 ARG VLLM_VERSION=v0.11.2
 FROM vllm/vllm-openai:${VLLM_VERSION}
 
+# PGB benchmark builds pin the immutable Hugging Face revisions as well as the
+# Python parser version. The resulting RunPod image reference is recorded with
+# every parser observation, so a later model update becomes a new challenger
+# instead of silently changing historical evidence.
+ARG MINERU_VLM_REVISION=bff20d4ae2bf202df9f45284b4d43681555a97ed
+ARG MINERU_PIPELINE_REVISION=ed6b654c018d742e65a17671e379c5e6ecc87ec9
+
 # HF_HUB_OFFLINE=1 + TRANSFORMERS_OFFLINE=1 force the HuggingFace libs to
 # read from cache only. Since model weights are baked into the image, the
 # cache is always present. Offline mode prevents accidental downloads if
@@ -92,11 +99,13 @@ RUN uv pip install --system --no-cache -r requirements.txt
 # hadolint ignore=DL3059
 RUN HF_HUB_OFFLINE=0 TRANSFORMERS_OFFLINE=0 HF_XET_HIGH_PERFORMANCE=1 \
     python3 -c "from huggingface_hub import snapshot_download; \
-    snapshot_download(repo_id='opendatalab/MinerU2.5-Pro-2605-1.2B')"
+    snapshot_download(repo_id='opendatalab/MinerU2.5-Pro-2605-1.2B', \
+    revision='${MINERU_VLM_REVISION}')"
 # hadolint ignore=DL3059
 RUN HF_HUB_OFFLINE=0 TRANSFORMERS_OFFLINE=0 HF_XET_HIGH_PERFORMANCE=1 \
     python3 -c "from huggingface_hub import snapshot_download; \
-    snapshot_download(repo_id='opendatalab/PDF-Extract-Kit-1.0')"
+    snapshot_download(repo_id='opendatalab/PDF-Extract-Kit-1.0', \
+    revision='${MINERU_PIPELINE_REVISION}')"
 
 # Copy the worker code last so iterating on it doesn't bust the pip or
 # model-cache layers. handler.py is the entry point; the worker/ package
